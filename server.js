@@ -340,10 +340,11 @@ function renderDashboardAdmin(listLog) {
     <div class="container py-5">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h2 class="fw-bold">🖥️ Monitoring Aset & Logistik Sekolah</h2>
-            <div>
+          <div>
                 <a href="/download-excel" class="btn btn-danger me-2 fw-bold">📥 Cetak Berita Acara (Excel)</a>
                 <a href="/clear-data" class="btn btn-outline-dark" onclick="return confirm('Hapus semua riwayat log?')">Reset Log</a>
                 <a href="/" class="btn btn-secondary ms-2">Form Utama</a>
+                <a href="/" class="btn btn-dark border-danger text-danger fw-bold ms-4" onclick="alert('Anda telah keluar dari Panel Admin.')">🚪 Log Out Admin</a>
             </div>
         </div>
         <div class="card p-4 bg-white border-0 shadow-sm" style="border-radius: 12px;">
