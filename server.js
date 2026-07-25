@@ -335,12 +335,19 @@ function renderDashboardAdmin(listLog) {
     return `
     <!DOCTYPE html>
     <html lang="id">
-    <head><meta charset="UTF-8"><title>Monitor Logistik Kantor</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
+    <head>
+        <meta charset="UTF-8">
+        <title>Monitor Logistik Kantor</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        
+        <!-- ⚡ 1. SIAPKAN SDK SUPABASE DARI CDN -->
+        <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    </head>
     <body class="bg-light">
     <div class="container py-5">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h2 class="fw-bold">🖥️ Monitoring Aset & Logistik Sekolah</h2>
-          <div>
+            <div>
                 <a href="/download-excel" class="btn btn-danger me-2 fw-bold">📥 Cetak Berita Acara (Excel)</a>
                 <a href="/clear-data" class="btn btn-outline-dark" onclick="return confirm('Hapus semua riwayat log?')">Reset Log</a>
                 <a href="/" class="btn btn-secondary ms-2">Form Utama</a>
@@ -350,12 +357,31 @@ function renderDashboardAdmin(listLog) {
         <div class="card p-4 bg-white border-0 shadow-sm" style="border-radius: 12px;">
             <div class="table-responsive">
                 <table class="table table-striped align-middle">
-                    <thead class="table-dark" style="background-color:#7F1D1D !important;"><tr><th>#</th><th>Instruktur</th><th>Sekolah Tujuan</th><th>Nama Alat/Barang</th><th>Waktu Keluar</th><th>Waktu Kembali</th><th>Status Gudang</th></tr></thead>
-                    <tbody>${rows || '<tr><td colspan="7" class="text-center text-muted">Seluruh aset aman terdata di dalam gudang kantor.</td></tr>'}</tbody>
+                    <thead class="table-dark" style="background-color:#7F1D1D !important;">
+                        <tr><th>#</th><th>Instruktur</th><th>Sekolah Tujuan</th><th>Nama Alat/Barang</th><th>Waktu Keluar</th><th>Waktu Kembali</th><th>Status Gudang</th></tr>
+                    </thead>
+                    <tbody id="tabelBodyLog">${rows || '<tr><td colspan="7" class="text-center text-muted" id="rowKosong">Seluruh aset aman terdata di dalam gudang kantor.</td></tr>'}</tbody>
                 </table>
             </div>
         </div>
     </div>
+
+    <!-- ⚡ 2. SCRIPT REALTIME SUPABASE -->
+    <script>
+        const SUPABASE_URL = 'https://otcfsvzivjbbvtmifiwt.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90Y2ZzdnppdmpiYnZ0bWlmaXd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5ODA0MDEsImV4cCI6MjEwMDU1NjQwMX0.m7dLh7xqraAi9coqO62APKiqwDRSxYxBdg7Y9xQn_BA';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // Dengarkan perubahan data di Supabase secara Realtime
+        supabaseClient
+          .channel('realtime-logistik')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'logPinjam' }, (payload) => {
+              // Jika ada instruktur yang submit form (INSERT / UPDATE)
+              // Otomatis refresh halaman admin secara instant tanpa disadari
+              window.location.reload(); 
+          })
+          .subscribe();
+    </script>
     </body></html>`;
 }
 
