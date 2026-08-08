@@ -1,12 +1,14 @@
 const express = require('express');
-const loki = require('lokijs');
+const { createClient } = require('@supabase/supabase-js');
 const ExcelJS = require('exceljs');
 
 const app = express();
 
-// 1. INISIALISASI DATABASE (VERSI RAMAH VERCEL - IN MEMORY)
-const db = new loki('peminjaman.db');
-let logPinjam = db.addCollection("logPinjam");
+// 1. INISIALISASI DATABASE SUPABASE
+const SUPABASE_URL = 'https://otcfsvzivjbbvtmifiwt.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90Y2ZzdnppdmpiYnZ0bWlmaXd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5ODA0MDEsImV4cCI6MjEwMDU1NjQwMX0.m7dLh7xqraAi9coqO62APKiqwDRSxYxBdg7Y9xQn_BA';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -23,16 +25,14 @@ app.get('/', (req, res) => {
     res.send(renderFormPeminjaman());
 });
 
-// 2. PROSES LOGIKA PINJAM / KEMBALI BARANG
-app.post('/transaksi', (req, res) => {
+// 2. PROSES LOGIKA PINJAM / KEMBALI BARANG (SUPABASE BACKEND)
+app.post('/transaksi', async (req, res) => {
     const { namaKaryawan, namaSekolah, aksi, barangDibatalkan } = req.body;
     
-    // Sinkronisasi Jam Indonesia (WIB)
-  // Paksa Vercel Menggunakan Zona Waktu Asia/Jakarta (WIB)
+    // Waktu Indonesia Barat (WIB)
     const sekarang = new Date();
     const tanggal = sekarang.toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta', day: '2-digit', month: '2-digit', year: 'numeric' });
-    const jamMenit = sekarang.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' });
-    const waktuLengkap = jamMenit.replace('.', ':') + ' WIB';
+    const jamMenit = sekarang.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' }).replace('.', ':') + ' WIB';
 
     if (!namaKaryawan) return res.redirect('/');
 
@@ -51,26 +51,38 @@ app.post('/transaksi', (req, res) => {
             return res.send(`<script>alert('Pilih minimal 1 barang yang ingin dibawa!'); window.location.href='/';</script>`);
         }
 
+        // Cek ke Supabase apakah ada barang yang sedang dibawa keluar
         for (let barang of barangDipilih) {
-            let adaYangPinjam = logPinjam.findOne({ namaBarang: barang, status: "DIBAWA KELUAR" });
+            const { data: adaYangPinjam } = await supabase
+                .from('logPinjam')
+                .select('*')
+                .eq('namaBarang', barang)
+                .eq('status', 'DIBAWA KELUAR')
+                .maybeSingle();
+
             if (adaYangPinjam) {
                 return res.send(`<script>alert('${barang} saat ini sedang dibawa keluar oleh ${adaYangPinjam.peminjam} ke ${adaYangPinjam.sekolah}!'); window.location.href='/';</script>`);
             }
         }
 
-        barangDipilih.forEach(barang => {
-            logPinjam.insert({
-                peminjam: namaKaryawan,
-                sekolah: namaSekolah,
-                namaBarang: barang,
-                tanggalPinjam: tanggal,
-                jamPinjam: jamMenit,
-                tanggalKembali: "-",
-                jamKembali: "-",
-                status: "DIBAWA KELUAR",
-                timestamp: sekarang.getTime()
-            });
-        });
+        // Simpan data barang baru ke Supabase
+        const dataInsert = barangDipilih.map(barang => ({
+            peminjam: namaKaryawan,
+            sekolah: namaSekolah,
+            namaBarang: barang,
+            tanggalPinjam: tanggal,
+            jamPinjam: jamMenit,
+            tanggalKembali: "-",
+            jamKembali: "-",
+            status: "DIBAWA KELUAR",
+            timestamp: sekarang.getTime()
+        }));
+
+        const { error } = await supabase.from('logPinjam').insert(dataInsert);
+
+        if (error) {
+            return res.send(`<script>alert('Gagal menyimpan data: ${error.message}'); window.location.href='/';</script>`);
+        }
 
         res.send(`<script>alert('Berhasil mencatat barang keluar! Selamat mengajar.'); window.location.href='/';</script>`);
 
@@ -86,23 +98,31 @@ app.post('/transaksi', (req, res) => {
             return res.send(`<script>alert('Pilih minimal 1 barang yang ingin dikembalikan!'); window.location.href='/';</script>`);
         }
 
-        barangKembali.forEach(idDoc => {
-            let record = logPinjam.get(Number(idDoc));
-            if (record && record.status === "DIBAWA KELUAR") {
-                record.status = "KEMBALI DI GUDANG";
-                record.tanggalKembali = tanggal;
-                record.jamKembali = jamMenit;
-                logPinjam.update(record);
-            }
-        });
+        // Update status pengembalian di Supabase berdasarkan ID
+        for (let idDoc of barangKembali) {
+            await supabase
+                .from('logPinjam')
+                .update({
+                    status: 'KEMBALI DI GUDANG',
+                    tanggalKembali: tanggal,
+                    jamKembali: jamMenit
+                })
+                .eq('id', Number(idDoc));
+        }
 
         res.send(`<script>alert('Barang berhasil dikembalikan ke gudang kantor!'); window.location.href='/';</script>`);
     }
 });
 
-app.get('/list-pinjaman/:karyawan', (req, res) => {
-    const list = logPinjam.find({ peminjam: req.params.karyawan, status: "DIBAWA KELUAR" });
-    res.json(list);
+// GET LIST BARANG YANG SEDANG DIBAWA OLEH INSTRUKTUR
+app.get('/list-pinjaman/:karyawan', async (req, res) => {
+    const { data: list } = await supabase
+        .from('logPinjam')
+        .select('*')
+        .eq('peminjam', req.params.karyawan)
+        .eq('status', 'DIBAWA KELUAR');
+
+    res.json(list || []);
 });
 
 // 3. LOGIN ADMIN
@@ -117,14 +137,22 @@ app.post('/login', (req, res) => {
 });
 
 // 4. DASHBOARD ADMIN
-app.get('/admin-dashboard', (req, res) => {
-    const listLog = logPinjam.chain().simplesort('timestamp', true).data();
-    res.send(renderDashboardAdmin(listLog));
+app.get('/admin-dashboard', async (req, res) => {
+    const { data: listLog } = await supabase
+        .from('logPinjam')
+        .select('*')
+        .order('timestamp', { ascending: false });
+
+    res.send(renderDashboardAdmin(listLog || []));
 });
 
 // 5. DOWNLOAD DATA EXCEL
 app.get('/download-excel', async (req, res) => {
-    const listLog = logPinjam.chain().simplesort('timestamp', false).data();
+    const { data: listLog } = await supabase
+        .from('logPinjam')
+        .select('*')
+        .order('timestamp', { ascending: true });
+
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Log Logistik Sekolah');
 
@@ -140,7 +168,7 @@ app.get('/download-excel', async (req, res) => {
         { header: 'Status Aset', key: 'status', width: 22 }
     ];
 
-    listLog.forEach((data, index) => {
+    (listLog || []).forEach((data, index) => {
         worksheet.addRow({
             no: index + 1,
             peminjam: data.peminjam,
@@ -163,9 +191,10 @@ app.get('/download-excel', async (req, res) => {
     res.end();
 });
 
-// 6. TRUNCATE DATA
-app.get('/clear-data', (req, res) => {
-    logPinjam.clear();
+// 6. CLEAR DATA (TRUNCATE)
+app.get('/clear-data', async (req, res) => {
+    // Menghapus seluruh baris data dari tabel logPinjam
+    await supabase.from('logPinjam').delete().neq('id', 0);
     res.send(`<script>alert('Log peminjaman dibersihkan!'); window.location.href='/admin-dashboard';</script>`);
 });
 
@@ -216,8 +245,6 @@ function renderFormPeminjaman() {
                 </div>
 
                 <div class="mb-4">
-                    <label class="form-label">AKSI LOGISTIK</label>
-                   <div class="mb-4">
                     <label class="form-label">AKSI LOGISTIK</label>
                     <div class="d-flex gap-2">
                         <input type="radio" class="btn-check" name="aksi" id="modePinjam" value="Pinjam" checked onclick="pilihMode(true)">
@@ -296,12 +323,12 @@ function renderFormPeminjaman() {
                 if(data.length === 0) {
                     box.innerHTML = '<span class="text-warning small">Kamu tidak tercatat sedang membawa barang apa pun.</span>';
                 } else {
-                    box.innerHTML = data.map(item => \`
+                    box.innerHTML = data.map(item => `
                         <label class="item-check d-flex justify-content-between">
-                            <span><input type="checkbox" name="barangDibatalkan" value="\${item.$loki}"> <strong>\${item.namaBarang}</strong></span>
-                            <span class="text-muted" style="font-size:11px;">📍 \${item.sekolah}</span>
+                            <span><input type="checkbox" name="barangDibatalkan" value="${item.id}"> <strong>${item.namaBarang}</strong></span>
+                            <span class="text-muted" style="font-size:11px;">📍 ${item.sekolah}</span>
                         </label>
-                    \`).join('');
+                    `).join('');
                 }
             } catch(e) {
                 box.innerHTML = '<span class="text-danger small">Gagal memuat inventory.</span>';
@@ -340,7 +367,7 @@ function renderDashboardAdmin(listLog) {
         <title>Monitor Logistik Kantor</title>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
         
-        <!-- ⚡ 1. SIAPKAN SDK SUPABASE DARI CDN -->
+        <!-- ⚡ SDK SUPABASE FRONTEND -->
         <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     </head>
     <body class="bg-light">
@@ -366,18 +393,17 @@ function renderDashboardAdmin(listLog) {
         </div>
     </div>
 
-    <!-- ⚡ 2. SCRIPT REALTIME SUPABASE -->
+    <!-- ⚡ SCRIPT REALTIME AUTO-REFRESH -->
     <script>
         const SUPABASE_URL = 'https://otcfsvzivjbbvtmifiwt.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90Y2ZzdnppdmpiYnZ0bWlmaXd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5ODA0MDEsImV4cCI6MjEwMDU1NjQwMX0.m7dLh7xqraAi9coqO62APKiqwDRSxYxBdg7Y9xQn_BA';
         const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-        // Dengarkan perubahan data di Supabase secara Realtime
+        // Pasang Realtime Channel
         supabaseClient
           .channel('realtime-logistik')
           .on('postgres_changes', { event: '*', schema: 'public', table: 'logPinjam' }, (payload) => {
-              // Jika ada instruktur yang submit form (INSERT / UPDATE)
-              // Otomatis refresh halaman admin secara instant tanpa disadari
+              // Otomatis refresh tampilan admin setiap kali ada data masuk/berubah
               window.location.reload(); 
           })
           .subscribe();
@@ -387,5 +413,5 @@ function renderDashboardAdmin(listLog) {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server Logistik Aktif di Port ${PORT}!`);
+    console.log(`Server Logistik Supabase Aktif di Port ${PORT}!`);
 });
